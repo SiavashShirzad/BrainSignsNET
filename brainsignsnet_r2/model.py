@@ -5,7 +5,7 @@ from torchvision.models.video import r3d_18
 
 LANDMARKS = ["CCPost", "CCAnt", "RPutamen", "LPutamen", "LCaudate", "LThalamus", "LPallidum", "LHippocampus", "LAmygdala",
              "RCaudate", "RThalamus", "RPallidum", "RHippocampus", "RAmygdala", "OpticChiasm", "IntraventricularForamen",
-             "Midbrain", "Pons", "Medulla", "LInternalCapsulGenu", "RInternalCapsulGenu"]
+             "Midbrain", "Pons", "Medulla", "PC", "AC", "LInternalCapsulGenu", "RInternalCapsulGenu"]
 
 
 def soft_argmax_3d(heatmaps):
