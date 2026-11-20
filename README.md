@@ -3,6 +3,9 @@
 ## 📌 Overview
 This repository provides a comprehensive pipeline for detecting anatomical keypoints in 3D medical images using a deep learning model based on 3D ResNet and UNet architectures.
 
+## 🆕 Revised model (trained weights)
+The trained weights and the inference code used in the revised manuscript are in [`brainsignsnet_r2/`](brainsignsnet_r2/README.md). Run `python brainsignsnet_r2/predict.py scan.nii.gz -o landmarks.csv` to obtain 21 landmarks in scanner coordinates (mm) from a raw T1-weighted scan.
+
 ## 🚀 Features
 - **3D Data Augmentation:** Robust set of augmentations for medical volumes.
 - **Flexible Dataset:** Custom PyTorch dataset for handling NIfTI (.nii.gz) images and keypoints.
