@@ -247,3 +247,17 @@ class Keypoint3DResNetUNet(nn.Module):
         coords = soft_argmax_3d(multi_heatmap)     # (N, 3*num_keypoints)
 
         return attn_heatmap, multi_heatmap, coords
+
+
+# Landmarks predicted by the released BrainSignsNET weights, in output order.
+LANDMARKS = ["CCPost", "CCAnt", "RPutamen", "LPutamen", "LCaudate", "LThalamus", "LPallidum", "LHippocampus", "LAmygdala",
+             "RCaudate", "RThalamus", "RPallidum", "RHippocampus", "RAmygdala", "OpticChiasm", "IntraventricularForamen",
+             "Midbrain", "Pons", "Medulla", "PC", "AC", "LInternalCapsulGenu", "RInternalCapsulGenu"]
+
+
+def load(weights, device="cpu"):
+    """Load the released weights (stored in half precision) into Keypoint3DResNetUNet."""
+    m = Keypoint3DResNetUNet(num_keypoints=len(LANDMARKS))
+    sd = torch.load(weights, map_location="cpu")
+    m.load_state_dict({k: v.float() for k, v in sd.items()})
+    return m.to(device).eval()

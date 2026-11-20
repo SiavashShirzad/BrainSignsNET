@@ -1,105 +1,96 @@
-# 3D Medical Image Keypoint Detection
+# BrainSignsNET
 
-## 📌 Overview
-This repository provides a comprehensive pipeline for detecting anatomical keypoints in 3D medical images using a deep learning model based on 3D ResNet and UNet architectures.
+BrainSignsNET localizes 23 anatomical landmarks on raw 3D T1-weighted brain MRI scans.
 
-## 🆕 Revised model (trained weights)
-The trained weights and the inference code used in the revised manuscript are in [`brainsignsnet_r2/`](brainsignsnet_r2/README.md). Run `python brainsignsnet_r2/predict.py scan.nii.gz -o landmarks.csv` to obtain 21 landmarks in scanner coordinates (mm) from a raw T1-weighted scan.
+- It works in a single pass over the whole scan.
+- Skull stripping, registration and cropping are not needed.
+- Coordinates are returned in scanner (RAS) space, in millimetres.
 
-## 🚀 Features
-- **3D Data Augmentation:** Robust set of augmentations for medical volumes.
-- **Flexible Dataset:** Custom PyTorch dataset for handling NIfTI (.nii.gz) images and keypoints.
-- **Advanced Model:** 3D ResNet backbone combined with a UNet decoder.
-- **Training and Validation:** Detailed scripts for training, validation, metrics tracking, and checkpointing.
-- **Visualization:** Clear visualizations of predictions versus ground truth.
-- **Inference Pipeline:** Easy-to-use inference script to predict keypoints and save results to CSV.
+This repository contains the model, the released trained weights, the inference script, and the code used for training and for extracting landmarks from FreeSurfer segmentations.
 
-## 📂 Project Structure
-```
-project/
-├── augmentation.py      # 3D data augmentation methods
-├── dataset.py           # Data loading and handling
-├── model.py             # Model architecture definition
-├── training.py          # Training script
-├── validation.py        # Validation script
-├── utils.py             # Utility functions for data processing
-├── visualization.py     # Visualization scripts
-├── predict.py           # Inference and prediction script
-├── main.py              # Main training and validation entry point
-├── requirements.txt     # Python dependencies
-└── README.md            # Project documentation
-```
+## Installation
 
-## 🔧 Installation
-**Clone the repository:**
 ```bash
 git clone https://github.com/SiavashShirzad/BrainSignsNET.git
 cd BrainSignsNET
+pip install -r requirments.txt
 ```
 
-**Set up a Python virtual environment (optional but recommended):**
+## Landmark prediction
+
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Linux/Mac
-.\venv\Scripts\activate  # On Windows
+python predict.py /path/to/scan.nii.gz -o landmarks.csv
+python predict.py --list scans.csv -o landmarks.csv      # scans.csv: columns id,image_path
 ```
 
-**Install dependencies:**
-```bash
-pip install -r requirements.txt
-```
+The output has one row per landmark, with the columns `id, landmark, x, y, z`.
 
-## 🗃️ Data Preparation
-Prepare a CSV file with columns:
-- `image_path`: Path to each NIfTI file (.nii.gz).
-- Keypoint columns (ending in `_center`), containing coordinates normalized to [0, 1].
+| Option | Use |
+|---|---|
+| `--device cpu` | run on the CPU |
+| `--weights` | use another weight file |
 
-**Example CSV structure:**
-```csv
-id,image_path,CorpusCallosum_center,LeftHippocampus_center,...
-001,data/patient001.nii.gz,"[0.5, 0.3, 0.6]","[0.4, 0.5, 0.2]",...
-002,data/patient002.nii.gz,"[0.6, 0.2, 0.5]","[0.5, 0.4, 0.3]",...
-```
+On a GPU, inference takes about 0.16 s per scan.
 
-## 🏃 Training the Model
-Use the main training script:
+## Landmarks
+
+| Group | Landmarks |
+|---|---|
+| Corpus callosum | anterior, posterior |
+| Commissures and ventricles | anterior commissure (AC), posterior commissure (PC), intraventricular foramen |
+| Optic chiasm | optic chiasm |
+| Brainstem | midbrain, pons, medulla |
+| Basal ganglia | left and right putamen, caudate and pallidum |
+| Thalamus | left and right thalamus |
+| Medial temporal lobe | left and right hippocampus and amygdala |
+| Internal capsule | left and right genu |
+
+The output order is given by `LANDMARKS` in `model.py`.
+
+## Trained weights
+
+`weights/brainsignsnet_fp16.pth` holds the model described in the article.
+
+- **Training data:** 2,391 BLSA and BIOCARD scans.
+- **Checkpoint:** selected on a separate participant-level tuning set.
+- **Labels:**
+  - 21 landmarks come from FreeSurfer segmentations (`FSKeypointExtraction/`).
+  - AC and PC come from a network trained on manual annotations.
+- **Format:** stored in half precision to keep the file small; `model.load()` converts them back to float32.
+
+The weights can also be used as a starting point for fine-tuning on other landmarks:
+
+1. Load the state dictionary into `Keypoint3DResNetUNet(num_keypoints=K)`.
+2. Keep the output channels of the landmarks you need.
+3. Initialize the channels of new landmarks randomly.
+
+### Preprocessing (inside `predict.py`)
+
+1. Reorient the scan to RAS.
+2. Resample the largest physical dimension to 128 voxels, keeping the same voxel size in every direction.
+3. Centre-pad to 128³.
+4. Apply z-score intensity normalization.
+
+## Training
+
+`main.py` trains the model from a CSV file that has an `image_path` column and one `<Landmark>_center` column per landmark, holding coordinates normalized to [0, 1]:
+
 ```bash
 python main.py --csv path/to/data.csv --pid_column id --epochs 50
 ```
-- **`--csv`**: Path to CSV data file.
-- **`--pid_column`**: Column to group samples (e.g., patient id).
-- **`--epochs`**: Number of epochs to train.
 
-## 🎯 Inference & Prediction
-Predict keypoints on a new image:
-```bash
-python predict.py --image path/to/new_image.nii.gz --checkpoint best_model.pth --output_csv predicted_coords.csv
+Labels can be generated from FreeSurfer `aparc+aseg` segmentations with `FSKeypointExtraction/extraction.py`.
+
+## Repository structure
+
 ```
-- **`--image`**: Path to input image.
-- **`--checkpoint`**: Path to trained model weights.
-- **`--output_csv`**: CSV file for predicted coordinates.
-
-## 📈 Visualization
-Use `visualization.py` functions in notebooks or scripts to visualize model predictions clearly.
-
-## 📚 Requirements
-Dependencies (auto-install with `requirements.txt`):
-```bash
-torch
-torchvision
-numpy
-pandas
-matplotlib
-scipy
-nibabel
-scikit-learn
-opencv-python
-tqdm
+├── model.py                  # Network (Keypoint3DResNetUNet), landmark list and weight loader
+├── predict.py                # Landmark prediction on raw NIfTI scans
+├── weights/                  # Released trained weights
+├── main.py, training.py, validation.py, dataset.py, augmentation.py, utils.py, visualization.py
+└── FSKeypointExtraction/     # Landmark extraction from FreeSurfer segmentations
 ```
 
-## 🙏 Acknowledgements
-- [PyTorch](https://pytorch.org/)
-- [Nibabel](https://nipy.org/nibabel/)
-- [Scikit-learn](https://scikit-learn.org/)
-- [OpenCV](https://opencv.org/)
-- [TQDM](https://github.com/tqdm/tqdm)
+## Citation
+
+If you use BrainSignsNET, please cite the BrainSignsNET article (Neuroinformatics, under revision).

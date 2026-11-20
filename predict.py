@@ -1,120 +1,54 @@
-# predict.py
-import torch
-import argparse
-import pandas as pd
-import numpy as np
-import torch.nn.functional as F
-from model import Keypoint3DResNetUNet
-from utils import load_nifti_image
-import cv2
-import matplotlib.pyplot as plt
+"""Landmark prediction on raw T1-weighted NIfTI scans with the released BrainSignsNET weights.
+No skull stripping, registration or cropping is needed. Output coordinates are in scanner (RAS) space, in mm.
 
-def preprocess_image(image_path, target_shape=(128,128,128)):
-    """
-    Load and resize a NIfTI image to a target shape.
-    """
-    data, spacing = load_nifti_image(image_path)
-    import torch
-    vol = torch.from_numpy(data).unsqueeze(0).unsqueeze(0)
-    vol_resized = F.interpolate(vol, size=target_shape, mode='trilinear', align_corners=False)
-    vol_resized = vol_resized.squeeze(0)
-    return vol_resized, spacing
+  python predict.py scan1.nii.gz [scan2.nii.gz ...] -o landmarks.csv
+  python predict.py --list scans.csv -o landmarks.csv      # scans.csv has columns id,image_path
+Options: --weights (default weights/brainsignsnet_fp16.pth), --device (default cuda if available)."""
+import os, argparse
+import numpy as np, pandas as pd, nibabel as nib, torch, torch.nn.functional as F
+from model import load, LANDMARKS
 
-def visualize_prediction(image, heatmaps, coords, keyPoints):
-    """
-    Visualize predicted keypoint heatmaps and overlay keypoint coordinates.
-    """
-    img = image[0].cpu().numpy()  # (128, 128, 128)
-    heatmaps_np = heatmaps.cpu().numpy()
-    coords_np = coords.cpu().numpy().reshape(-1, 3)
-    num_keypoints = coords_np.shape[0]
-    for i in range(num_keypoints):
-        x, y, z = coords_np[i]
-        x_slice = int(round(x))
-        y_slice = int(round(y))
-        z_slice = int(round(z))
-        hm = heatmaps_np[i]
-        fig, axes = plt.subplots(1, 3, figsize=(18,6))
-        axes[0].imshow(img[x_slice,:,:], cmap='gray', origin='lower')
-        axes[0].imshow(hm[x_slice,:,:], cmap='hot', alpha=0.5, origin='lower')
-        axes[0].scatter(z_slice, y_slice, color='cyan', marker='x')
-        axes[0].set_title(f"{keyPoints[i]} Sagittal")
-        
-        axes[1].imshow(img[:,y_slice,:].T, cmap='gray', origin='lower')
-        axes[1].imshow(hm[:,y_slice,:].T, cmap='hot', alpha=0.5, origin='lower')
-        axes[1].scatter(x_slice, z_slice, color='cyan', marker='x')
-        axes[1].set_title(f"{keyPoints[i]} Coronal")
-        
-        axes[2].imshow(img[:,:,z_slice].T, cmap='gray', origin='lower')
-        axes[2].imshow(hm[:,:,z_slice].T, cmap='hot', alpha=0.5, origin='lower')
-        axes[2].scatter(x_slice, y_slice, color='cyan', marker='x')
-        axes[2].set_title(f"{keyPoints[i]} Axial")
-        plt.tight_layout()
-        plt.show()
+VOL = 128
+HERE = os.path.dirname(os.path.abspath(__file__))
 
-def save_coords_to_csv(coords, output_csv, keyPoints):
-    """
-    Save predicted keypoint coordinates to a CSV file.
-    """
-    coords_np = coords.cpu().numpy().reshape(-1, 3)
-    df = pd.DataFrame(coords_np, columns=['z', 'y', 'x'])
-    df['keypoint'] = keyPoints
-    df.to_csv(output_csv, index=False)
-    print(f"Coordinates saved to {output_csv}")
 
-def main():
-    parser = argparse.ArgumentParser(description="Predict keypoints from an input image.")
-    parser.add_argument("--image", type=str, required=True, help="Path to input NIfTI image.")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint.")
-    parser.add_argument("--output_csv", type=str, default="predicted_coords.csv", help="CSV file for saving coordinates.")
-    args = parser.parse_args()
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Define keypoints (update the list as needed)
-    keyPoints = [
-        "Corpus Callosum Posterior",
-        "Corpus Callosum Anterior",
-        "Right Putamen",
-        "Left Putamen",
-        "Left Caudate",
-        "Left Thalamus",
-        "Left Pallidum",
-        "Left Hippocampus",
-        "Left Amygdala",
-        "Right Caudate",
-        "Right Thalamus",
-        "Right Pallidum",
-        "Right Hippocampus",
-        "Right Amygdala",
-        "Optic Chiasm",
-        "Intraventricular Foramen",
-        "Midbrain",
-        "Pons",
-        "Medulla",
-        "Posterior Commissure",
-        "Anterior Commissure",
-        "Left Internal Capsule Genu",
-        "Right Internal Capsule Genu"
-    ]
-    
-    # Preprocess image.
-    image_tensor, spacing = preprocess_image(args.image)
-    image_tensor = image_tensor.to(device)
-    
-    # Load model.
-    model = Keypoint3DResNetUNet(num_keypoints=len(keyPoints))
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device))
-    model.to(device)
-    model.eval()
-    
-    with torch.no_grad():
-        pred_attn, pred_heatmaps, pred_coords = model(image_tensor.unsqueeze(0))
-    
-    # Visualize predictions.
-    visualize_prediction(image_tensor, pred_heatmaps[0], pred_coords[0], keyPoints)
-    
-    # Save predicted coordinates.
-    save_coords_to_csv(pred_coords[0], args.output_csv, keyPoints)
+def preprocess(path):
+    """Canonical (RAS) orientation; the largest physical dimension is resampled to 128 voxels, the others keep the same
+    voxel size and are centre-padded; z-score intensity normalization."""
+    img = nib.as_closest_canonical(nib.load(path))
+    data = np.ascontiguousarray(img.get_fdata(dtype=np.float32))
+    data = np.ascontiguousarray(data[..., 0]) if data.ndim == 4 else data
+    sp = np.array(img.header.get_zooms()[:3], float); phys = np.array(data.shape) * sp
+    ts = phys.max() / VOL; new = tuple(int(round(p / ts)) for p in phys)
+    v = F.interpolate(torch.from_numpy(data)[None, None], size=new, mode="trilinear", align_corners=False)
+    pv = np.array([VOL] * 3) - np.array(new)
+    pad = (pv[2] // 2, pv[2] - pv[2] // 2, pv[1] // 2, pv[1] - pv[1] // 2, pv[0] // 2, pv[0] - pv[0] // 2)
+    v = F.pad(v, pad)[0]
+    s = v.std(); v = (v - v.mean()) / (s if s > 1e-6 else 1.0)
+    off = np.array([pad[4], pad[2], pad[0]])
+    return v[None], img, ts, off, sp
+
+
+@torch.no_grad()
+def predict(model, path, device):
+    x, img, ts, off, sp = preprocess(path)
+    g = model(x.to(device))[2][0].view(-1, 3).cpu().numpy()     # grid coordinates (K, 3)
+    vox = (g - off) * ts / sp                                   # canonical voxel coordinates
+    return nib.affines.apply_affine(img.affine, vox)           # scanner RAS (mm)
+
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("scans", nargs="*"); ap.add_argument("--list"); ap.add_argument("-o", "--out", default="landmarks.csv")
+    ap.add_argument("--weights", default=os.path.join(HERE, "weights", "brainsignsnet_fp16.pth"))
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    a = ap.parse_args()
+    df = pd.read_csv(a.list) if a.list else pd.DataFrame(dict(id=[os.path.basename(s) for s in a.scans], image_path=a.scans))
+    model = load(a.weights, a.device); rows = []
+    for r in df.itertuples():
+        try:
+            w = predict(model, r.image_path, a.device)
+        except Exception as e:
+            print(f"failed: {r.id}: {e}"); continue
+        rows += [dict(id=r.id, landmark=n, x=p[0], y=p[1], z=p[2]) for n, p in zip(LANDMARKS, w)]
+    pd.DataFrame(rows).to_csv(a.out, index=False); print(f"{len(rows) // len(LANDMARKS)} of {len(df)} scans -> {a.out}")
